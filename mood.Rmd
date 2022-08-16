@@ -1,0 +1,1584 @@
+---
+title: "mood"
+author: "matthew"
+date: '2022-04-15'
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(Rmisc)
+library(jmv)
+library(ggcorrplot)
+library(lme4)
+library(lmerTest)
+library(rstatix)
+library(reshape2)
+library(hausekeep)
+library(data.table)
+library(ggpubr)
+library(dae)
+library(emmeans)
+library(TOSTER)
+source('utils.R')
+`%!in%` = Negate(`%in%`)
+```
+
+## Exploring mood data
+
+Using Rdata file as of 13-04-22
+```{r load data}
+mood_data = as_tibble(get(load('my_data_Questionnaire.Rdata'))) %>%
+  filter(questionnaire == 'Checklist')
+
+# # filter for participants with 4 sessions
+# completed = c()
+# for (i in 1:length(unique(mood_data$participant))) {
+#   ppt = unique(mood_data$participant)[i]
+#   by.participant = filter(mood_data, participant == ppt)
+#   N.sessions = length(unique(by.participant$session))
+#   if (N.sessions == 4) {
+#     completed = append(completed, ppt)
+#   }
+# }
+# setdiff(completed, mylist)
+
+
+# this is the list of valid ppts to include in analysis 
+# from gender.xlsx in lagringshotell (-E019), n=61
+completed = c(1,2,3,4,5,8,10,12,14,15,17,19,21,22,23,24,26,29,30,32,33,34,36,37,
+              38,39,43,44,45,46,47,51,53,55,58,59,60,61,62,63,64,66,71,73,75,77,
+              78,80,81,84,86,87,90,92,97,99,100,103,107,112,120,123)
+
+mood_data_c = mood_data %>%
+  filter(participant %in% completed) %>%
+  mutate(task_order = ifelse(stress_sessions == '1_3', 1, 0)) %>%  # 1 = stress first, 0 = control first
+  select(-c(status, pilot, comment, questionnaire, item_order, RT, date, gender,
+            drug_sessions, stress_stim, pleas_stim, stress_sessions)) %>%
+  mutate(item_name = recode(item_name, "conscious" = "self_conscious", 
+                            "desperate" = "distressed")) %>%
+  dplyr::rename(task_type = stress_type)
+
+# # particpant 29 session 1 didn't get read into Guido's dataset, so I'm manually adding it here
+# E029_1 = read.csv('E029_1_2022_Jan_10_0953_questionnaire_custom.csv') %>%
+#   as_tibble() %>%
+#   filter(questionnaire == 'Checklist') %>%
+#   mutate(Drug = 'placebo', Stress = 'stress', task_type = 'tsst', task_order = 1) %>%
+#   select(-c(questionnaire, item_order, item_text, RT)) %>%
+#   mutate(participant = as.numeric(recode(participant, 'E028' = '29'))) %>%
+#   mutate(stage = as.numeric(recode(stage, 'Q1'='1', 'Q2'='2', 'Q3'='3', 'Q4'='4','Q5'='5',
+#                  'Q6'='6', 'Q7'='7', 'Q8'='8', 'Q9'='9', 'Q10'='10', 'Q11'='11'))) %>%
+#   mutate(item_name = recode(item_name, "conscious" = "self_conscious", 
+#                             "desperate" = "distressed"))
+# 
+# mood_data_c = bind_rows(mood_data_c, E029_1)
+
+
+mood_data_c$participant = as.factor(mood_data_c$participant)
+mood_data_c$session = as.factor(mood_data_c$session)
+mood_data_c$stage = as.factor(mood_data_c$stage)
+#mood_data_c$item_order = as.factor(mood_data_c$item_order)
+mood_data_c$item_name = as.factor(mood_data_c$item_name)
+#mood_data_c$gender = as.factor(mood_data_c$gender)
+mood_data_c$Drug = as.factor(mood_data_c$Drug)
+mood_data_c$Stress = as.factor(mood_data_c$Stress)
+mood_data_c$task_type = as.factor(mood_data_c$task_type)
+mood_data_c$task_order = as.factor(mood_data_c$task_order)
+#mood_data_c$stress_sessions = as.factor(mood_data_c$stress_sessions)
+#mood_data_c$drug_sessions = as.factor(mood_data_c$drug_sessions)
+#mood_data_c$stress_stim = as.factor(mood_data_c$stress_stim)
+#mood_data_c$pleas_stim = as.factor(mood_data_c$pleas_stim)
+
+# mood_data_c = mood_data_c %>%
+#   arrange(participant, session, stage) %>%
+#   ddply(.(participant, session, item_name), transform, bsln_corr = response - response[3])
+
+mood_data_c_placebo = mood_data_c %>%
+  filter(Drug == "placebo")
+
+```
+
+Make some plots
+```{r simple plots}
+mood_data_c %>% 
+  ggplot(aes(x = stage, y = response, color = Stress, group = participant:session)) + 
+  geom_line() + 
+  facet_wrap(~item_name) +
+  theme(legend.position = "top") + 
+  geom_vline(xintercept = 3.5, col = "magenta", lty = 2) + 
+  geom_vline(xintercept = 4.5, col = "blue", lty = 2) + 
+  geom_vline(xintercept = c(5.5,7.5), col = "black", lty = 2)+
+  labs(title = "All sessions")
+
+mood_data_c_placebo %>% 
+  ggplot(aes(x = stage, y = response, color = Stress, group = participant:session)) + 
+  geom_line() + 
+  facet_wrap(~item_name) +
+  theme(legend.position = "top") + 
+  geom_vline(xintercept = 3.5, col = "magenta", lty = 2) + 
+  geom_vline(xintercept = 4.5, col = "blue", lty = 2) + 
+  geom_vline(xintercept = c(5.5,7.5), col = "black", lty = 2)+
+  labs(title = "Placebo only")
+```
+```{r, fig.width=15, fig.height=10}
+# raw_means = mood_data_c %>%
+#   summarySEwithin(measurevar = 'response', withinvars = c('Stress', 'stage', 'item_name'), idvar = 'participant') %>%
+#   mutate(lower = response-2*se, upper = response+2*se)
+
+raw_means = mood_data_c %>%
+  summarySEwithin2(measurevar = 'response', withinvars = c('Stress', 'stage', 'item_name'), idvar = 'participant') %>%
+  mutate(lower = response-ci, upper = response+ci)
+
+raw_means %>%
+  ggplot(aes(x = stage, y = response, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  facet_wrap(~item_name)+
+  labs(title = "All sessions")
+
+raw_means_placebo = mood_data_c_placebo %>%
+  summarySEwithin2(measurevar = 'response', withinvars = c('Stress', 'stage', 'item_name'), idvar = 'participant') %>%
+  mutate(lower = response-ci, upper = response+ci)
+
+raw_means_placebo %>%
+  ggplot(aes(x = stage, y = response, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  facet_wrap(~item_name)+
+  labs(title = "Placebo only")
+```
+```{r, fig.width=15, fig.height=10}
+raw_means = mood_data_c %>%
+  summarySEwithin2(measurevar = 'response', withinvars = c('task_type', 'stage', 'item_name'), idvar = 'participant') %>%
+  mutate(lower = response-ci, upper = response+ci)
+
+raw_means %>%
+  ggplot(aes(x = stage, y = response, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  facet_wrap(~item_name)+
+  labs(title = "All sessions")
+
+raw_means_placebo = mood_data_c_placebo %>%
+  summarySEwithin2(measurevar = 'response', withinvars = c('task_type', 'stage', 'item_name'), idvar = 'participant') %>%
+  mutate(lower = response-ci, upper = response+ci)
+
+raw_means_placebo %>%
+  ggplot(aes(x = stage, y = response, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  facet_wrap(~item_name)+
+  labs(title = "Placebo only")
+```
+
+## Factor analysis
+
+
+These have a few missing values:
+participant 58, session 3, stage 9
+participant 5, session 2, stage 11
+
+
+```{r}
+mood_efa_withdrug = mood_data_c %>%
+  filter(item_name %!in% c("stomach_discomfort", "dry_mouth", "dizzy", 
+                           "nauseous", "high", "euphoric", "venflon_pain")) %>%
+  pivot_wider(names_from = item_name, values_from = response)
+
+save(mood_efa_withdrug, file = "mood_efa_withdrug.Rdata")
+
+
+mood_efa_nodrug = mood_data_c %>%
+  filter(item_name %!in% c("stomach_discomfort", "dry_mouth", "dizzy", 
+                           "nauseous", "high", "euphoric", "venflon_pain")) %>%
+  filter(Drug == 'placebo') %>%
+  pivot_wider(names_from = item_name, values_from = response)
+
+save(mood_efa_nodrug, file = "mood_efa_nodrug.Rdata")
+```
+
+Extraction: Maximum likelihood
+Factor retain: parallel
+Rotation: Oblimin
+
+```{r}
+jmv::efa(
+    data = mood_efa_nodrug,
+    vars = vars(bored, confident, distressed, dull, embarassed, good, happy,
+                heart_palpitations, indifferent, irritable, not_myself, relaxed,
+                safe, shaking, stressed, vulnerable, warm_face, anxious),
+    extraction = "ml",
+    hideLoadings = 0.0,
+    sortLoadings = TRUE,
+    screePlot = TRUE,
+    eigen = TRUE,
+    factorCor = TRUE,
+    factorSummary = TRUE,
+    modelFit = TRUE)
+```
+
+The item 'self_conscious' seems to be problematic. Perhaps this item was interpreted differently
+by participants.
+
+
+Looking at the correlation plot
+```{r correlation plot, fig.width=5, fig.height=5}
+corr_data = mood_efa_nodrug %>%
+  select(-c(participant, session, stage, task_type, Drug, Stress, task_order))
+
+corr = round(cor(corr_data, use = "complete.obs"),2)
+
+pmat = cor_pmat(corr_data)
+
+ggcorrplot(corr, hc.order = T, lab = F)
+```
+
+I decided to use the factors yielded by oblimin, in only
+placebo sessions, with 'self_conscious' removed.
+
+Factor based scores
+```{r}
+positive_affect = c('happy', 'good', 'confident', 'safe', 'relaxed')
+negative_affect = c('stressed', 'anxious', 'vulnerable', 'embarassed', 'distressed')
+stress_activation = c('warm_face', 'heart_palpitations', 'shaking')
+meh = c('bored', 'indifferent', 'dull')
+
+# add basline correction
+mood_with_bsln = mood_data_c %>%
+  arrange(participant, session, stage, item_name) %>%
+  ddply(.(participant, session, item_name), transform, bsln_corr = response - response[3])
+
+
+mood_data_with_factors = mood_with_bsln %>%
+  mutate(factor = ifelse(item_name %in% positive_affect, 'positive_affect',
+                         ifelse(item_name %in% negative_affect, 'negative_affect',
+                                ifelse(item_name %in% stress_activation, 'stress_activation',
+                                  ifelse(item_name %in% meh, 'meh',
+                                       'NA'))))) %>%
+  filter(factor != 'NA') %>%
+  group_by(participant, session, stage, factor) %>%
+  dplyr::mutate(factor_score = mean(response), factor_score_bsln_corr = mean(bsln_corr)) %>%
+  ungroup()
+
+# positive_affect = c('happy', 'good', 'confident', 'safe', 'relaxed')
+# negative_affect = c('shaking', 'stressed', 'anxious', 'heart_palpitations',
+#                     'vulnerable', 'embarassed', 'distressed', 'warm_face')
+# meh = c('bored', 'indifferent', 'dull')
+# 
+# mood_data_with_factors = mood_data_c %>%
+#   mutate(factor = ifelse(item_name %in% positive_affect, 'positive_affect',
+#                          ifelse(item_name %in% negative_affect, 'negative_affect',
+#                                   ifelse(item_name %in% meh, 'meh',
+#                                        'NA')))) %>%
+#   filter(factor != 'NA') %>%
+#   group_by(participant, session, stage, factor) %>%
+#   dplyr::mutate(factor_score = mean(response))
+
+
+
+mood_factors = mood_data_with_factors %>%
+  pivot_wider(id_cols = c(participant, session, stage, task_type, Stress, Drug, task_order),
+              names_from = factor, values_from = factor_score,
+              values_fn = mean)
+
+mood_factors_bsln_corr = mood_data_with_factors %>%
+  pivot_wider(id_cols = c(participant, session, stage, task_type, Stress, Drug, task_order),
+              names_from = factor, values_from = factor_score_bsln_corr,
+              values_fn = mean) %>%
+  filter(participant %!in% c(2,29))
+
+
+# mood_factors = mood_factors %>%
+#   arrange(participant, session, stage) %>%
+#   ddply(.(participant, session), transform, neg_bsln_corr = negative_affect - negative_affect[3])%>%
+#   ddply(.(participant, session), transform, pos_bsln_corr = positive_affect - positive_affect[3])%>%
+#   ddply(.(participant, session), transform, act_bsln_corr = stress_activation - stress_activation[3])%>%
+#   ddply(.(participant, session), transform, meh_bsln_corr = meh - meh[3])
+
+
+mood_factors_placebo = mood_factors %>%
+  filter(Drug == 'placebo')
+
+```
+
+
+Baseline corrected plots
+```{r}
+#here is the basline corrected factor data:
+mood_factors_bsln_corr
+#looks good
+
+#plot the raw values:
+mood_factors_bsln_corr %>%
+  filter(session == 1) %>%
+  ggplot(aes(x = stage, y = negative_affect, color = participant, group = participant)) +
+  geom_line()
+#okay so it looks like it's doing what i want it to do
+#it has actually been baseline corrected
+#so the question now is how to get the means + ci from bsln corr data
+
+# mood_factors_bsln_corr %>%
+#   filter(stage == 3 & negative_affect !=0)
+# 
+# mood_factors_bsln_corr %>%
+#   filter(ifelse(stage == 3 & negative_affect !=0,F,T))
+
+mood_factors_bsln_corr %>%
+  filter(participant != 2 & session != 2) %>%
+  summarySEwithin2(measurevar = 'negative_affect', 
+                   withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = c(task_type))) +
+  geom_line()
+
+mood_factors_bsln_corr %>%
+  filter(participant != 2 & session != 2) %>%
+  summarySEwithin2(measurevar = 'negative_affect', 
+                   withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = c(task_type))) +
+  geom_line() +
+  geom_ribbon(aes(ymin = negative_affect-ci, ymax = negative_affect+ci, color = task_type, fill = task_type), alpha = 0.2)
+
+```
+
+
+Factor based score diagnostics
+```{r}
+mood_factors_bsln_corr %>%
+  ggplot(aes(x=negative_affect)) +
+  geom_histogram() +
+  labs(title = "baseline corrected negative affect distribution")
+mood_factors_bsln_corr %>%
+  ggplot(aes(x=positive_affect)) +
+  geom_histogram() +
+  labs(title = "baseline corrected positive affect distribution")
+mood_factors_bsln_corr %>%
+  ggplot(aes(x=stress_activation)) +
+  geom_histogram() +
+  labs(title = "baseline corrected stress activation distribution")
+
+model  <- lm(negative_affect ~ Stress*stage, data = mood_factors_bsln_corr)
+# Create a QQ plot of residuals
+ggqqplot(residuals(model)) +
+  labs(title = "negative affect qqplot")
+model  <- lm(positive_affect ~ Stress*stage, data = mood_factors_bsln_corr)
+# Create a QQ plot of residuals
+ggqqplot(residuals(model)) +
+  labs(title = "positive affect qqplot")
+model  <- lm(stress_activation ~ Stress*stage, data = mood_factors_bsln_corr)
+# Create a QQ plot of residuals
+ggqqplot(residuals(model)) +
+  labs(title = "stress activation qqplot")
+```
+
+All sessions
+```{r}
+positive_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+negative_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+activation_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = stress_activation-ci, upper = stress_activation+ci)
+
+meh_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = meh-ci, upper = meh+ci)
+
+positive_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "Positive Affect - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+negative_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "Negative Affect - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+activation_means %>%
+  ggplot(aes(x = stage, y = stress_activation, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "Stress Activation - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+meh_means %>%
+  ggplot(aes(x = stage, y = meh, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "meh - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+```
+
+```{r}
+positive_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+negative_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+activation_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = stress_activation-ci, upper = stress_activation+ci)
+
+meh_means = mood_factors%>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = meh-ci, upper = meh+ci)
+
+
+positive_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Positive Affect - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+negative_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Negative Affect - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+activation_means %>%
+  ggplot(aes(x = stage, y = stress_activation, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Stress Activation - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+meh_means %>%
+  ggplot(aes(x = stage, y = meh, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "meh - all sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+```
+
+Placebo sessions
+```{r}
+positive_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+negative_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+activation_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = stress_activation-ci, upper = stress_activation+ci)
+
+meh_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = meh-ci, upper = meh+ci)
+
+positive_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "Positive Affect - placebo sessions") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+negative_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "Negative Affect - placebo sessions ") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+activation_means %>%
+  ggplot(aes(x = stage, y = stress_activation, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "Stress Activation - placebo sessions ") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+meh_means %>%
+  ggplot(aes(x = stage, y = meh, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  labs(title = "meh - placebo sessions ") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+```
+
+```{r}
+positive_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+negative_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+activation_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = stress_activation-ci, upper = stress_activation+ci)
+
+meh_means = mood_factors_placebo %>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = meh-ci, upper = meh+ci)
+
+
+positive_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Positive Affect") +
+  scale_color_manual(values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  theme_bw()+
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+negative_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Negative Affect - placebo sessions only") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+activation_means %>%
+  ggplot(aes(x = stage, y = stress_activation, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Stress Activation - placebo sessions only") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+meh_means %>%
+  ggplot(aes(x = stage, y = meh, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "meh - placebo sessions only") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+```
+Baseline correction plots
+```{r, fig.width=10, fig.height=7}
+positive_bsl_means = mood_factors_bsln_corr %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+negative_bsl_means = mood_factors_bsln_corr %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+positive_bsl_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Positive Affect - placebo sessions, basline corrected") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+
+
+negative_bsl_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  labs(title = "Negative Affect - placebo sessions, baseline corrected") +
+  scale_x_discrete(labels = c("Bsl 1", "Bsl 2", "Bsl 3", "Induction", "Drug 1",
+                              "Reminder 1", "Self-admin", "Reminder 2", "Bandit",
+                              "Traffic", "Drug 2")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"), plot.title = element_text(size=20, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))
+```
+
+## Models
+
+For the first model I will only look at the state induction, i.e. Q3 & 4, for all sessions
+
+For the second model I will look at stages 3-8 for placebo sessions only.
+In this model the repetition of the ReSST is a between-subjects factor (rep: regular/musical)
+
+Select the appropriate data:
+```{r}
+predrug_only_factors = mood_factors %>%
+  filter(stage %in% c(3,4))
+
+placebo_only_factors = mood_factors_placebo %>%
+  filter(stage %in% c(5,6,7,8)) %>%
+  mutate(rep = case_when(task_type == 'color' | task_type == 'tsst' ~ 'regular',
+                         task_type == 'music' | task_type == 'singing' ~ 'musical'))
+
+induction_bslcorr = mood_factors_bsln_corr %>%
+  filter(stage %in% c(3,4),
+         participant %!in% c(19,29))
+
+
+```
+
+Some data is missing, so I'm removing those participants for anovas
+```{r}
+predrug_only_factors_anova = predrug_only_factors %>%
+  filter(participant != 19 & participant != 29)
+
+placebo_only_factors_anova = placebo_only_factors %>%
+  filter(participant != 19 & participant != 29)
+
+
+# predrug_only_factors_anova = predrug_only_factors #%>%
+#   #filter(participant != 2 & participant != 58 & participant != 99)
+# 
+# placebo_only_factors_anova = placebo_only_factors #%>%
+#   #filter(participant != 2 & participant != 58 & participant != 99)
+```
+
+Means + SE with summarySEwithin2
+```{r}
+
+predrug_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('task_type','stage'), 
+                   idvar = 'participant')
+
+predrug_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('task_type','stage'),
+                   idvar = 'participant')
+
+predrug_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('task_type','stage'),
+                   idvar = 'participant')
+
+
+predrug_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('Stress','stage'), 
+                   idvar = 'participant')
+
+predrug_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('Stress','stage'),
+                   idvar = 'participant')
+
+predrug_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('Stress','stage'),
+                   idvar = 'participant')
+
+
+placebo_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('Stress','stage'),
+                   idvar = 'participant')
+
+placebo_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('Stress','stage'),
+                   idvar = 'participant')
+
+placebo_only_factors_anova %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('Stress','stage'),
+                   idvar = 'participant')
+
+```
+
+
+Model 1: Induction, all sessions
+
+Model 1a negative affect, pre-drug, all sessions
+```{r, rownames.print = F, max.print = 20, rows.print = 20}
+#significant interaction of task_type and stage
+predrug_only_factors_anova %>%
+  anova_test(dv = negative_affect, wid = participant, within = c(task_type, stage), between = task_order) %>%
+  get_anova_table()
+
+# outliers = predrug_only_factors_anova %>%
+#   identify_outliers(negative_affect) %>%
+#   filter(is.extreme == T)
+
+# wo_outliers = anti_join(predrug_only_factors_anova, outliers, by = c('participant', 'session', 'stage'))
+# 
+# wo_outliers %>%
+#   anova_test(dv = negative_affect, wid = participant, within = c(task_type, stage), between = task_order) %>%
+#   get_anova_table()
+# 
+# wo_outliers %>%
+#   group_by(stage) %>%
+#   anova_test(dv = negative_affect, wid = participant, within = task_type) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+# 
+# wo_outliers %>%
+#   #group_by(task_order) %>%
+#   anova_test(dv = negative_affect, wid = participant, within = c(task_type)) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+
+#significant effect of task_type at both stages
+one.way <- predrug_only_factors_anova %>%
+  group_by(stage) %>%
+  anova_test(dv = negative_affect, wid = participant, within = task_type) %>%
+  get_anova_table() %>%
+  adjust_pvalue(method = "hochberg")
+one.way
+
+#sig diff between both control and both stress tasks at stage 4, all else ns
+pwc = predrug_only_factors_anova %>%
+  group_by(stage) %>%
+  pairwise_t_test(negative_affect ~ task_type, paired = TRUE,
+                  p.adjust.method = "hochberg")
+pwc
+
+
+
+```
+
+Model 1b positive affect, pre-drug, all sessions
+```{r, rownames.print = F, max.print = 20, rows.print = 20}
+#significant interaction of task_type and stage
+predrug_only_factors_anova %>%
+  anova_test(dv = positive_affect, wid = participant, within = c(task_type, stage), between = task_order) %>%
+  get_anova_table()
+
+# outliers = predrug_only_factors_anova %>%
+#   identify_outliers(positive_affect) %>%
+#   filter(is.extreme == T)
+# 
+# wo_outliers = anti_join(predrug_only_factors_anova, outliers, by = c('participant', 'session', 'stage'))
+# 
+# wo_outliers %>%
+#   anova_test(dv = positive_affect, wid = participant, within = c(task_type, stage), between = task_order) %>%
+#   get_anova_table()
+# 
+# one.way <- wo_outliers %>%
+#   group_by(stage) %>%
+#   anova_test(dv = positive_affect, wid = participant, within = task_type) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+# one.way
+# 
+# pwc <- wo_outliers %>%
+#   group_by(stage) %>%
+#   pairwise_t_test(
+#     positive_affect ~ task_type, paired = TRUE,
+#     p.adjust.method = "hochberg"
+#     )
+# 
+# pwc %>%
+#   filter(stage == 4)
+
+#significant effect of task_type at stage 4
+one.way <- predrug_only_factors_anova %>%
+  group_by(stage) %>%
+  anova_test(dv = positive_affect, wid = participant, within = task_type) %>%
+  get_anova_table() %>%
+  adjust_pvalue(method = "hochberg")
+one.way
+
+#sig diff between both control and both stress tasks at stage 4, all else ns
+pwc <- predrug_only_factors_anova %>%
+  group_by(stage) %>%
+  pairwise_t_test(
+    positive_affect ~ task_type, paired = TRUE,
+    p.adjust.method = "hochberg"
+    )
+
+pwc %>%
+  filter(stage == 4)
+```
+
+Model 1c stress activation, pre-drug, all sessions
+```{r, rownames.print = F, max.print = 20, rows.print = 20}
+
+#significant interaction of task_type and stage
+predrug_only_factors_anova %>%
+  anova_test(dv = stress_activation, wid = participant, within = c(task_type, stage), between = task_order) %>%
+  get_anova_table()
+
+# outliers = predrug_only_factors_anova %>%
+#   identify_outliers(stress_activation) %>%
+#   filter(is.extreme == T)
+# 
+# wo_outliers = anti_join(predrug_only_factors_anova, outliers, by = c('participant', 'session', 'stage'))
+# 
+# wo_outliers %>%
+#   anova_test(dv = stress_activation, wid = participant, within = c(task_type, stage), between = task_order) %>%
+#   get_anova_table()
+
+#significant effect of task_type at stage 4
+# one.way <- predrug_only_factors_anova %>%
+#   group_by(stage) %>%
+#   anova_test(dv = stress_activation, wid = participant, within = task_type) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+# one.way
+
+#sig diff between both control and both stress tasks at stage 4, all else ns
+pwc <- predrug_only_factors_anova %>%
+  group_by(stage) %>%
+  pairwise_t_test(
+    stress_activation ~ task_type, paired = TRUE,
+    p.adjust.method = "hochberg"
+    )
+
+pwc
+
+```
+
+
+Model 1d meh, pre-drug, all sessions
+```{r}
+# predrug_only_factors_anova %>%
+#   anova_test(dv = meh, wid = participant, within = c(task_type, stage)) %>%
+#   get_anova_table()
+# 
+# one.way <- predrug_only_factors_anova %>%
+#   group_by(task_type) %>%
+#   anova_test(dv = meh, wid = participant, within = stage) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "bonferroni")
+# one.way
+# 
+# pwc <- predrug_only_factors_anova %>%
+#   group_by(task_type) %>%
+#   pairwise_t_test(
+#     meh ~ stage, paired = TRUE,
+#     p.adjust.method = "bonferroni"
+#     )
+# pwc
+```
+
+Model 2: induction - reminder 2, placebo sessions only
+
+Model 2a negative affect, placebo only, all stages
+```{r, rownames.print = F, max.print = 20, rows.print = 20}
+#significant interaction between stress and stage
+placebo_only_factors_anova %>%
+  anova_test(dv = negative_affect, wid = participant, within = c(Stress, stage), between = c(rep, task_order)) %>%
+  get_anova_table()
+
+# outliers = placebo_only_factors_anova %>%
+#   identify_outliers(negative_affect) %>%
+#   filter(is.extreme == T)
+# 
+# wo_outliers = anti_join(placebo_only_factors_anova, outliers, by = c('participant', 'session', 'stage'))
+# 
+# wo_outliers %>%
+#   anova_test(dv = negative_affect, wid = participant, within = c(Stress, stage), between = c(rep, task_order)) %>%
+#   get_anova_table()
+
+
+# #significant effect of stress at stages 4-8
+# one.way <- placebo_only_factors_anova %>%
+#   group_by(stage) %>%
+#   anova_test(dv = negative_affect, wid = participant, within = Stress) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+# one.way
+
+#sig diff between pleasant and stress at stages 4-8
+pwc <- placebo_only_factors_anova %>%
+  group_by(stage) %>%
+  pairwise_t_test(
+    negative_affect ~ Stress, paired = TRUE,
+    p.adjust.method = "hochberg"
+    )
+pwc %>%
+  filter(stage %in% c(5,6,7,8))
+```
+
+Model 2b positive affect, placebo only, all stages
+```{r, rownames.print = F, max.print = 20, rows.print = 20}
+#significant interaction between stress and stage
+placebo_only_factors_anova %>%
+  anova_test(dv = positive_affect, wid = participant, within = c(Stress, stage), between = c(rep, task_order)) %>%
+  get_anova_table()
+# 
+# outliers = placebo_only_factors_anova %>%
+#   identify_outliers(positive_affect) %>%
+#   filter(is.extreme == T)
+# 
+# wo_outliers = anti_join(placebo_only_factors_anova, outliers, by = c('participant', 'session', 'stage'))
+# 
+# wo_outliers %>%
+#   anova_test(dv = positive_affect, wid = participant, within = c(Stress, stage), between = c(rep, task_order)) %>%
+#   get_anova_table()
+
+# #significant effect of Stress at stages 4-8
+# one.way <- placebo_only_factors_anova %>%
+#   group_by(stage) %>%
+#   anova_test(dv = positive_affect, wid = participant, within = Stress) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+# one.way
+
+pwc <- placebo_only_factors_anova %>%
+  group_by(stage) %>%
+  pairwise_t_test(
+    positive_affect ~ Stress, paired = TRUE,
+    p.adjust.method = "hochberg"
+    )
+pwc %>%
+  filter(stage %in% c(5,6,7,8))
+
+#sig diff between pleasant and stress at stages 4,6,8
+```
+
+Model 2c Stress activation, placebo only, all stages
+```{r, rownames.print = F, max.print = 20, rows.print = 20}
+#significant interaction between stress and stage
+placebo_only_factors_anova %>%
+  anova_test(dv = stress_activation, wid = participant, within = c(Stress, stage), between = c(rep, task_order)) %>%
+  get_anova_table()
+
+# outliers = placebo_only_factors_anova %>%
+#   identify_outliers(stress_activation) %>%
+#   filter(is.extreme == T)
+# 
+# wo_outliers = anti_join(placebo_only_factors_anova, outliers, by = c('participant', 'session', 'stage'))
+# 
+# wo_outliers %>%
+#   anova_test(dv = stress_activation, wid = participant, within = c(Stress, stage), between = c(rep, task_order)) %>%
+#   get_anova_table()
+
+#significant effect of Stress at stages 4-8
+# one.way <- placebo_only_factors_anova %>%
+#   group_by(stage) %>%
+#   anova_test(dv = stress_activation, wid = participant, within = Stress) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "hochberg")
+# one.way
+
+
+pwc <- placebo_only_factors_anova %>%
+  group_by(stage) %>%
+  pairwise_t_test(
+    stress_activation ~ Stress, paired = TRUE,
+    p.adjust.method = "hochberg"
+    )
+pwc %>%
+  filter(stage %in% c(5,6,7,8))
+```
+
+Model 2d meh, placebo only, all stages
+```{r}
+# placebo_only_factors_anova %>%
+#   anova_test(dv = meh, wid = participant, within = c(Stress, stage), between = rep) %>%
+#   get_anova_table()
+# 
+# two.way <- placebo_only_factors_anova %>%
+#   group_by(Stress) %>%
+#   anova_test(dv = meh, wid = participant, within = stage, between = rep) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "bonferroni")
+# two.way
+# 
+# one.way <- placebo_only_factors_anova %>%
+#   group_by(rep, Stress) %>%
+#   anova_test(dv = meh, wid = participant, within = stage) %>%
+#   get_anova_table() %>%
+#   adjust_pvalue(method = "bonferroni")
+# one.way
+# 
+# pwc <- placebo_only_factors_anova %>%
+#   group_by(rep, Stress) %>%
+#   pairwise_t_test(
+#     meh ~ stage, paired = TRUE,
+#     p.adjust.method = "bonferroni"
+#     )
+# pwc
+
+```
+
+
+
+## Model Diagnostics
+
+ANOVA models but with aov() so I can get residuals, also emmeans
+
+```{r}
+#model 1a
+model_1a = aov(negative_affect ~ task_type*stage*task_order+Error(participant/(task_type*stage)), data = predrug_only_factors_anova)
+
+emmeans(model_1a,specs = ~ stage | task_type)
+
+model.pr = proj(model_1a)
+predrug_only_factors_anova$neg_resi = model.pr[[3]][, "Residuals"]
+predrug_only_factors_anova$neg_fit = fitted.aovlist(model_1a)
+
+ggqqplot(predrug_only_factors_anova$neg_resi) +
+  labs(title = "Q-Q plot - Model 1 - Negative Affect")
+
+predrug_only_factors_anova %>%
+  ggplot(aes(x=neg_fit, y=neg_resi)) +
+  geom_point() +
+  geom_hline(yintercept = 0)+
+  labs(title = "Residuals - Model 1 - Negative Affect", x = "Fitted", y = "Residuals") +
+  theme_bw()
+
+#anova_summary(model)
+
+#model 1b
+model = aov(positive_affect ~ task_type*stage*task_order+Error(participant/(task_type*stage)), data = predrug_only_factors_anova)
+
+emmeans(model, specs = ~ stage | task_type)
+
+model.pr = proj(model)
+predrug_only_factors_anova$pos_resi = model.pr[[3]][, "Residuals"]
+predrug_only_factors_anova$pos_fit = fitted.aovlist(model)
+
+ggqqplot(predrug_only_factors_anova$pos_resi) +
+  labs(title = "Q-Q plot - Model 1 - Positive Affect")
+
+predrug_only_factors_anova %>%
+  ggplot(aes(x=pos_fit, y=pos_resi)) +
+  geom_point() +
+  geom_hline(yintercept = 0)+
+  labs(title = "Residuals - Model 1 - Positive Affect", x = "Fitted", y = "Residuals") +
+  theme_bw()
+
+#anova_summary(model)
+
+#model 1c
+model = aov(stress_activation ~ task_type*stage*task_order+Error(participant/(task_type*stage)), data = predrug_only_factors_anova)
+
+emmeans(model, specs = ~ stage | task_type)
+
+model.pr = proj(model)
+predrug_only_factors_anova$act_resi = model.pr[[3]][, "Residuals"]
+predrug_only_factors_anova$act_fit = fitted.aovlist(model)
+
+ggqqplot(predrug_only_factors_anova$act_resi) +
+  labs(title = "Q-Q plot - Model 1 - Stress Activation")
+
+predrug_only_factors_anova %>%
+  ggplot(aes(x=act_fit, y=act_resi)) +
+  geom_point() +
+  geom_hline(yintercept = 0)+
+  labs(title = "Residuals - Model 1 - Stress Activation", x = "Fitted", y = "Residuals") +
+  theme_bw()
+
+#anova_summary(model)
+
+
+
+#model 2a
+model = aov(negative_affect ~ Stress*stage*task_order*rep+Error(participant/(Stress*stage)), data = placebo_only_factors_anova)
+
+emmeans(model, specs = ~ stage | Stress)
+
+model.pr = proj(model)
+placebo_only_factors_anova$neg_resi = model.pr[[3]][, "Residuals"]
+placebo_only_factors_anova$neg_fit = fitted.aovlist(model)
+
+ggqqplot(placebo_only_factors_anova$neg_resi) +
+  labs(title = "Q-Q plot - Model 2 - Negative Affect")
+
+placebo_only_factors_anova %>%
+  ggplot(aes(x=neg_fit, y=neg_resi)) +
+  geom_point() +
+  geom_hline(yintercept = 0)+
+  labs(title = "Residuals - Model 2 - Negative Affect", x = "Fitted", y = "Residuals") +
+  theme_bw()
+
+#anova_summary(model)
+
+#model 2b
+model = aov(positive_affect ~ Stress*stage*task_order*rep+Error(participant/(Stress*stage)), data = placebo_only_factors_anova)
+
+emmeans(model, specs = ~ stage | Stress)
+
+model.pr = proj(model)
+placebo_only_factors_anova$pos_resi = model.pr[[3]][, "Residuals"]
+placebo_only_factors_anova$pos_fit = fitted.aovlist(model)
+
+ggqqplot(placebo_only_factors_anova$pos_resi) +
+  labs(title = "Q-Q plot - Model 2 - Positive Affect")
+
+placebo_only_factors_anova %>%
+  ggplot(aes(x=pos_fit, y=pos_resi)) +
+  geom_point() +
+  geom_hline(yintercept = 0)+
+  labs(title = "Residuals - Model 2 - Positive Affect", x = "Fitted", y = "Residuals") +
+  theme_bw()
+
+#anova_summary(model)
+
+#model 2c
+model = aov(stress_activation ~ Stress*stage*task_order*rep+Error(participant/(Stress*stage)), data = placebo_only_factors_anova)
+
+emmeans(model, specs = ~ stage | Stress)
+
+model.pr = proj(model)
+placebo_only_factors_anova$act_resi = model.pr[[3]][, "Residuals"]
+placebo_only_factors_anova$act_fit = fitted.aovlist(model)
+
+ggqqplot(placebo_only_factors_anova$act_resi) +
+  labs(title = "Q-Q plot - Model 2 - Stress Activation")
+
+placebo_only_factors_anova %>%
+  ggplot(aes(x=act_fit, y=act_resi)) +
+  geom_point() +
+  geom_hline(yintercept = 0)+
+  labs(title = "Residuals - Model 2 - Stress Activation", x = "Fitted", y = "Residuals") +
+  theme_bw()
+
+#anova_summary(model)
+```
+
+## Trying equivalence test
+
+```{r}
+
+equi_speech = mood_factors_bsln_corr %>%
+  filter(stage == 4 & task_type == 'tsst')
+
+equi_sing = mood_factors_bsln_corr %>%
+  filter(stage == 4 & task_type == 'singing')
+
+setdiff(equi_speech$participant, equi_sing$participant)
+
+setdiff(equi_sing$participant, equi_speech$participant)
+
+library(pastecs)
+
+stat.desc(equi_speech$negative_affect)
+
+stat.desc(equi_sing$negative_affect)
+
+cor(equi_speech$negative_affect, equi_sing$negative_affect)
+
+TOSTpaired.raw(n = 60, m1 = 29.6960891, m2 = 29.1531433, sd1 = 24.1485656, 
+               r12 = cor(equi_speech$negative_affect, equi_sing$negative_affect),
+               sd2 = 21.1467524, low_eqbound = -5, high_eqbound = 5,
+               plot = T, verbose = T)
+
+tsum_TOST(m1 = 29.6960891, m2 = 29.1531433, sd1 = 24.1485656, n1 = 60,
+          sd2 = 21.1467524, n2 = 60, r12 = cor(equi_speech$negative_affect, equi_sing$negative_affect),
+          hypothesis = 'EQU', paired = T, low_eqbound = -5, high_eqbound = 5, eqbound_type = 'raw')
+```
+
+
+## Linear mixed models
+
+Model 1: Pre-drug only, all sessions
+
+Model 1a negative affect
+```{r}
+# na_model_1 = lmer(negative_affect ~ Stress*stage + (1|participant) + (Stress|task_type), data = predrug_only_factors)
+# 
+# summary(na_model_1)
+```
+
+Model 1b positive affect
+```{r}
+# #pa_model_1 = lmer(positive_affect ~ Stress*stage + (1|participant) + (Stress|task_type), data = predrug_only_factors)
+# #singularity error
+# 
+# pa_model_1 = lmer(positive_affect ~ Stress*stage + (1|participant), data = predrug_only_factors)
+# 
+# #pa_model_1 = lmer(positive_affect ~ task_type*stage + (1|participant), data = predrug_only_factors)
+# 
+# summary(pa_model_1)
+```
+
+
+Model 2: all stages, placebo sessions only
+
+Model 2a negative affect
+```{r}
+# #na_model_2 = lmer(negative_affect ~ Stress*stage + (1|participant) + (Stress|task_type), data = placebo_only_factors)
+# #singularity error
+# 
+# na_model_2 = lmer(negative_affect ~ Stress*stage + (1|participant), data = placebo_only_factors)
+# 
+# summary(na_model_2)
+```
+
+Model 2b positive affect
+```{r}
+# #pa_model_2 = lmer(positive_affect ~ Stress*stage + (1|participant) + (Stress|task_type), data = placebo_only_factors)
+# #singularity error
+# 
+# pa_model_2 = lmer(positive_affect ~ Stress*stage + (1|participant), data = placebo_only_factors)
+# 
+# summary(pa_model_2)
+
+```
+
+
+
+
+
+Nice plots
+Placebo sessions
+```{r}
+mood_plots = mood_factors %>%
+  filter(participant != 19 & participant != 29) %>%
+  filter(stage %in% c(2,3,4,5,6,7,8,9)) %>%
+  filter(ifelse(Drug == 'placebo' | (Drug == 'oxycodone' & stage %in% c(2,3,4)),T,F))
+
+positive_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+#write.csv(positive_means,file = "summaries/pos_stress_summ.csv")
+
+negative_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+#write.csv(negative_means,file = "summaries/neg_stress_summ.csv")
+
+activation_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = stress_activation-ci, upper = stress_activation+ci)
+
+#write.csv(activation_means,file = "summaries/act_stress_summ.csv")
+
+meh_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('Stress', 'stage'), idvar = 'participant') %>%
+  mutate(lower = meh-ci, upper = meh+ci)
+
+positive_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  scale_color_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  scale_fill_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  theme_bw()+
+  labs(title = "Positive Affect", x = "", y = "Positive Affect VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task")) +
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+
+negative_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  scale_color_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  scale_fill_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  theme_bw()+
+  labs(title = "Negative Affect", x = "", y = "Negative Affect VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+
+activation_means %>%
+  ggplot(aes(x = stage, y = stress_activation, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  scale_color_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  scale_fill_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  theme_bw()+
+  labs(title = "Stress Activation", x = "", y = "Stress Activation VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+
+meh_means %>%
+  ggplot(aes(x = stage, y = meh, color = Stress, group = Stress)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = Stress, fill = Stress), alpha = .2) +
+  scale_color_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  scale_fill_manual(name ="", labels=c("stress" = "Stress", "pleasant" = "Control"), values=c("stress"="#F8766D", "pleasant"="#00BFC4"))+
+  theme_bw()+
+  labs(title = "Tiredness", x = "", y = "Tiredness VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+```
+
+```{r}
+positive_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = positive_affect-ci, upper = positive_affect+ci)
+
+#write.csv(positive_means,file = "summaries/pos_task_summ.csv")
+
+negative_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = negative_affect-ci, upper = negative_affect+ci)
+
+#write.csv(negative_means,file = "summaries/neg_task_summ.csv")
+
+activation_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = stress_activation-ci, upper = stress_activation+ci)
+
+#write.csv(activation_means,file = "summaries/act_task_summ.csv")
+
+meh_means = mood_plots %>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  mutate(lower = meh-ci, upper = meh+ci)
+
+
+positive_means %>%
+  ggplot(aes(x = stage, y = positive_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  theme_bw()+
+  labs(title = "Positive Affect", x = "", y = "Positive Affect VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+
+negative_means %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  theme_bw()+
+  labs(title = "Negative Affect", x = "", y = "Negative Affect VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+
+activation_means %>%
+  ggplot(aes(x = stage, y = stress_activation, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  theme_bw()+
+  labs(title = "Stress Activation", x = "", y = "Stress Activation VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+
+meh_means %>%
+  ggplot(aes(x = stage, y = meh, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  theme_bw()+
+  labs(title = "Tiredness", x = "", y = "Tiredness VAS") +
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9)) +
+  ylim(0,100)
+
+```
+
+
+
+okay, these are the baseline corrected plots that work:
+```{r}
+blsn_corr_plots = mood_factors_bsln_corr %>%
+  filter(participant != 19 & participant != 29) %>%
+  filter(stage %in% c(2,3,4,5,6,7,8,9)) %>%
+  filter(ifelse(Drug == 'placebo' | (Drug == 'oxycodone' & stage %in% c(2,3,4)),T,F))
+
+#Neg affect
+blsn_corr_plots %>%
+  summarySEwithin2(measurevar = 'negative_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  ggplot(aes(x = stage, y = negative_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = negative_affect-ci, ymax = negative_affect+ci, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00")) +
+  theme_bw() +
+  labs(title = "Baseline-corrected Negative Affect", x = "", y = "Negative Affect VAS\n(baseline-corrected)")+
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))+
+  coord_cartesian(ylim = c(-50, 50))
+
+#Pos affect
+blsn_corr_plots %>%
+  summarySEwithin2(measurevar = 'positive_affect', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  ggplot(aes(x = stage, y = positive_affect, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = positive_affect-ci, ymax = positive_affect+ci, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00")) +
+  theme_bw() +
+  labs(title = "Baseline-corrected Positive Affect", x = "", y = "Positive Affect VAS\n(baseline-corrected)")+
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))+
+  coord_cartesian(ylim = c(-50, 50))
+
+#Stress activation
+blsn_corr_plots %>%
+  summarySEwithin2(measurevar = 'stress_activation', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  ggplot(aes(x = stage, y = stress_activation, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = stress_activation-ci, ymax = stress_activation+ci, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00")) +
+  theme_bw() +
+  labs(title = "Baseline-corrected Stress Activation", x = "", y = "Stress Activation VAS\n(baseline-corrected)")+
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))+
+  coord_cartesian(ylim = c(-50, 50))
+
+#Tiredeness
+blsn_corr_plots %>%
+  summarySEwithin2(measurevar = 'meh', withinvars = c('task_type', 'stage'), idvar = 'participant') %>%
+  ggplot(aes(x = stage, y = meh, color = task_type, group = task_type)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = meh-ci, ymax = meh+ci, color = task_type, fill = task_type), alpha = .2) +
+  scale_color_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"), 
+                     values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00"))+
+  scale_fill_manual(name = "", labels=c("tsst" = "Speech", "color" = "Color Control", "singing" = "Singing", "music" = "Music Control"),
+                    values=c("tsst"="#F8766D", "singing" = "#C77CFF", "color"="#00BFC4", "music" = "#7CAE00")) +
+  theme_bw() +
+  labs(title = "Baseline-corrected Tiredness", x = "", y = "Tiredness VAS\n(baseline-corrected)")+
+  scale_x_discrete(labels = c("Baseline 1", "Baseline 2", "Post-induction",
+                              "Pre-reminder 1", "Post-reminder 1", "Pre-reminder 2", "Post-reminder 2", "Post-unrelated task"))+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), axis.text=element_text(size=10),
+        axis.title=element_text(size=12,face="bold"), plot.title = element_text(size=16, face = "bold"),
+        legend.title=element_text(size=10), legend.text=element_text(size=9))+
+  coord_cartesian(ylim = c(-50, 50))
+
+
+```
+
+
+
+
